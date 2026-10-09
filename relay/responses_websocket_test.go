@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -26,7 +28,101 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+// These cases inspect the actual outbound HTTP/WS body, without substituting
+// an upstream server. History replay must not enable new searches or discard
+// the existing search action, source URLs, or unrelated tool declarations.
+func TestResponsesSearchHistoryCompatibility(t *testing.T) {
+	search := `{"type":"web_search_call","status":"completed","action":{"type":"search","query":"OpenAI Responses API streaming documentation","sources":[{"type":"url","url":"https://developers.openai.com/api/docs/guides/streaming-responses"}]}}`
+	for _, tc := range []struct {
+		name, input, tools, choice, metadata string
+		lite, websocket, passthrough         bool
+		channelType, relayMode               int
+		override, headerOverride             map[string]any
+		wantTools, wantAdditional            int
+		wantChoice                           string
+	}{
+		{name: "standard compaction", input: "[" + search + "]", tools: "[]", choice: `"auto"`, wantTools: 1, wantChoice: "none"},
+		{name: "existing function remains callable", input: "[" + search + "]", tools: `[{"type":"function","name":"read_file","parameters":{"type":"object"}}]`, choice: `"auto"`, wantTools: 2, wantChoice: "auto"},
+		{name: "explicit tool selection is preserved", input: "[" + search + "]", tools: "[]", choice: `{"type":"function","name":"read_file"}`, wantTools: 1, wantChoice: `{"type":"function","name":"read_file"}`},
+		{name: "existing search declaration", input: "[" + search + "]", tools: `[{"type":"web_search_preview"}]`, choice: `"auto"`, wantTools: 1, wantChoice: "auto"},
+		{name: "literal text is not search history", input: `[{"role":"user","content":"Explain web_search_call"}]`, tools: "[]"},
+		{name: "other channel", input: "[" + search + "]", tools: "[]", channelType: constant.ChannelTypeOpenAI},
+		{name: "native compact endpoint", input: "[" + search + "]", tools: "[]", relayMode: relayconstant.RelayModeResponsesCompact},
+		{name: "HTTP passthrough", input: "[" + search + "]", tools: "[]", passthrough: true, wantTools: 1, wantChoice: "none"},
+		{name: "parameter override removes declaration", input: "[" + search + "]", tools: `[{"type":"web_search"}]`, override: map[string]any{"tools": []any{}}, wantTools: 1, wantChoice: "none"},
+		{name: "Lite trigger stays last", input: "[" + search + `,{"type":"compaction_trigger"}]`, lite: true, wantAdditional: 1, wantChoice: "none"},
+		{name: "Lite extends existing tools", input: `[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]},` + search + `,{"type":"compaction_trigger"}]`, lite: true, choice: `"auto"`, wantAdditional: 2, wantChoice: "auto"},
+		{name: "WebSocket Lite metadata passthrough", input: "[" + search + `,{"type":"compaction_trigger"}]`, websocket: true, passthrough: true, metadata: `{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}`, wantAdditional: 1, wantChoice: "none"},
+		{name: "channel disables HTTP Lite", input: "[" + search + "]", lite: true, headerOverride: map[string]any{"X-OpenAI-Internal-Codex-Responses-Lite": "false"}, wantTools: 1, wantChoice: "none"},
+		{name: "channel disables WebSocket Lite", input: "[" + search + "]", websocket: true, passthrough: true, metadata: `{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}`, headerOverride: map[string]any{"x-openai-internal-codex-responses-lite": "false"}, wantTools: 1, wantChoice: "none"},
+		{name: "existing declaration follows channel mode", input: "[" + search + "]", tools: `[{"type":"web_search","external_web_access":false}]`, websocket: true, passthrough: true, metadata: `{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}`, headerOverride: map[string]any{"x-openai-internal-codex-responses-lite": "false"}, wantTools: 1},
+		{name: "channel enables HTTP Lite", input: "[" + search + `,{"type":"compaction_trigger"}]`, headerOverride: map[string]any{"x-openai-internal-codex-responses-lite": "true"}, wantAdditional: 1, wantChoice: "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := dto.OpenAIResponsesRequest{Model: "gpt-5.6-sol", Input: common.RawMessage(tc.input), Tools: common.RawMessage(tc.tools), ToolChoice: common.RawMessage(tc.choice), ClientMetadata: common.RawMessage(tc.metadata)}
+			payload, err := common.Marshal(request)
+			require.NoError(t, err)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(payload)))
+			if tc.lite {
+				c.Request.Header.Set("x-openai-internal-codex-responses-lite", "true")
+			}
+			channelType := tc.channelType
+			if channelType == 0 {
+				channelType = constant.ChannelTypeCodex
+			}
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, request.Model)
+			common.SetContextKey(c, constant.ContextKeyChannelType, channelType)
+			common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{PassThroughBodyEnabled: tc.passthrough})
+			common.SetContextKey(c, constant.ContextKeyChannelParamOverride, tc.override)
+			common.SetContextKey(c, constant.ContextKeyChannelHeaderOverride, tc.headerOverride)
+			info := relaycommon.GenRelayInfoResponses(c, &request)
+			if tc.relayMode != 0 {
+				info.RelayMode = tc.relayMode
+			}
+			if tc.websocket {
+				var apiErr *types.NewAPIError
+				payload, apiErr = buildResponsesWSCreatePayload(c, info, request, nil, "")
+				require.Nil(t, apiErr)
+				assert.Equal(t, "response.create", gjson.GetBytes(payload, "type").String())
+				assert.Equal(t, tc.wantAdditional, int(gjson.GetBytes(payload, `input.#(type=="additional_tools").tools.#`).Int()))
+				assert.Equal(t, tc.wantChoice, gjson.GetBytes(payload, "tool_choice").String())
+				assert.Equal(t, tc.wantTools, int(gjson.GetBytes(payload, "tools.#").Int()))
+			} else {
+				_, body, closer, apiErr := PrepareResponsesRequest(c, info, &request)
+				require.Nil(t, apiErr)
+				payload, err = io.ReadAll(body)
+				require.NoError(t, err)
+				require.NoError(t, closer.Close())
+				assert.Equal(t, tc.wantTools, int(gjson.GetBytes(payload, "tools.#").Int()))
+				assert.Equal(t, tc.wantAdditional, int(gjson.GetBytes(payload, `input.#(type=="additional_tools").tools.#`).Int()))
+				assert.Equal(t, tc.wantChoice, gjson.GetBytes(payload, "tool_choice").String())
+			}
+			if strings.Contains(tc.input, `"type":"web_search_call"`) {
+				assert.JSONEq(t, search, gjson.GetBytes(payload, `input.#(type=="web_search_call")`).Raw)
+			}
+			if tc.name == "channel disables WebSocket Lite" || tc.name == "existing declaration follows channel mode" {
+				assert.Equal(t, "false", gjson.GetBytes(payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String())
+			}
+			if tc.wantAdditional > 0 {
+				items := gjson.GetBytes(payload, "input").Array()
+				assert.Equal(t, "compaction_trigger", items[len(items)-1].Get("type").String())
+				assert.False(t, gjson.GetBytes(payload, `input.#(type=="additional_tools").tools.#(type=="web_search").external_web_access`).Bool())
+			}
+			if tc.wantTools > 0 && tc.name != "existing search declaration" {
+				assert.False(t, gjson.GetBytes(payload, `tools.#(type=="web_search").external_web_access`).Bool())
+			}
+			if tc.passthrough {
+				storage, err := common.GetBodyStorage(c)
+				require.NoError(t, err)
+				require.NoError(t, storage.Close())
+			}
+		})
+	}
+}
 
 // normalizeResponsesWSTestMessage runs the read-loop envelope parse followed by
 // request normalization, exactly as the session does for one response.create.

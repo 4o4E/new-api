@@ -155,6 +155,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
+	if info.RelayMode == relayconstant.RelayModeResponses {
+		if value := c.GetHeader(ResponsesLiteHeader); value != "" {
+			req.Set(ResponsesLiteHeader, value)
+		}
+	}
 
 	key := strings.TrimSpace(info.ApiKey)
 	if !strings.HasPrefix(key, "{") {
