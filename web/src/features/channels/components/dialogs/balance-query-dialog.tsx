@@ -36,6 +36,7 @@ import { handleServerError } from '@/lib/handle-server-error'
 import { createServerError } from '@/lib/server-error-message'
 
 import { getCodexUsage, updateChannelBalance } from '../../api'
+import { isCodexChannelType } from '../../constants'
 import { channelsQueryKeys } from '../../lib'
 import { useChannels } from '../channels-provider'
 import {
@@ -64,7 +65,7 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
 
-  const isCodex = currentRow?.type === 57
+  const isCodex = currentRow ? isCodexChannelType(currentRow.type) : false
 
   const handleQueryCodexUsage = async () => {
     const row = currentRow

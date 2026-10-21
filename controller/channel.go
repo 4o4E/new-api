@@ -636,7 +636,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	}
 
 	// Codex OAuth key validation (optional, only when JSON object is provided)
-	if channel.Type == constant.ChannelTypeCodex {
+	if constant.IsCodexChannel(channel.Type) {
 		trimmedKey := strings.TrimSpace(channel.Key)
 		if isAdd || trimmedKey != "" {
 			if !strings.HasPrefix(trimmedKey, "{") {
@@ -1452,7 +1452,7 @@ func FetchModels(c *gin.Context) {
 		}
 
 		key := strings.TrimSpace(req.Key)
-		if req.Type != constant.ChannelTypeCodex {
+		if !constant.IsCodexChannel(req.Type) {
 			key = strings.Split(key, "\n")[0]
 		}
 		channel = &model.Channel{

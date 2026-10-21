@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 )
 
 type Adaptor struct {
@@ -98,6 +100,12 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 
 	if isCompact {
 		return request, nil
+	}
+	// The dedicated image-tool channel forces streaming Responses. Clients such
+	// as OMP's image tool send stream=false but parse text/event-stream. The
+	// regular Codex channel keeps its existing request shape.
+	if info != nil && info.ChannelType == constant.ChannelTypeCodexImage {
+		request.Stream = lo.ToPtr(true)
 	}
 	// codex: store must be false
 	request.Store = json.RawMessage("false")
@@ -195,7 +203,9 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	// Clients may omit it or include parameters like `application/json; charset=utf-8`,
 	// which can be rejected by the upstream. Force the exact media type.
 	req.Set("Content-Type", "application/json")
-	if info.IsStream {
+	// The image-tool channel always receives SSE, including when the inbound
+	// client asked for a non-streaming response.
+	if info.IsStream || (info.RelayMode == relayconstant.RelayModeResponses && info.ChannelType == constant.ChannelTypeCodexImage) {
 		req.Set("Accept", "text/event-stream")
 	} else if req.Get("Accept") == "" {
 		req.Set("Accept", "application/json")

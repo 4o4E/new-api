@@ -54,3 +54,63 @@ func TestConvertOpenAIResponsesRequestDropsPenalties(t *testing.T) {
 	assert.Nil(t, request.FrequencyPenalty)
 	assert.Nil(t, request.PresencePenalty)
 }
+
+func TestConvertOpenAIResponsesRequestForcesStreamForImageChannel(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodexImage},
+		RelayMode:   relayconstant.RelayModeResponses,
+	}
+	stream := false
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model:  "gpt-5.5",
+		Input:  json.RawMessage(`"hello"`),
+		Stream: &stream,
+	})
+	require.NoError(t, err)
+
+	request, ok := converted.(dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NotNil(t, request.Stream)
+	assert.True(t, *request.Stream)
+}
+
+func TestConvertOpenAIResponsesRequestKeepsRegularCodexStream(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodex},
+		RelayMode:   relayconstant.RelayModeResponses,
+	}
+	stream := false
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model:  "gpt-5.5",
+		Input:  json.RawMessage(`"hello"`),
+		Stream: &stream,
+	})
+	require.NoError(t, err)
+
+	request, ok := converted.(dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NotNil(t, request.Stream)
+	assert.False(t, *request.Stream)
+}
+
+func TestConvertOpenAIResponsesRequestLeavesCompactStreamAlone(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodex},
+		RelayMode:   relayconstant.RelayModeResponsesCompact,
+	}
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model: "gpt-5.5",
+		Input: json.RawMessage(`"hello"`),
+	})
+	require.NoError(t, err)
+
+	request, ok := converted.(dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	assert.Nil(t, request.Stream)
+}

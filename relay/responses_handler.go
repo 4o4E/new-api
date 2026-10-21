@@ -16,6 +16,14 @@ import (
 )
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+	// The Codex image-tool channel forces the upstream/downstream stream on.
+	// Restore the client's flag so a retry against another channel keeps its
+	// response mode.
+	clientStream := info.IsStream
+	defer func() {
+		info.IsStream = clientStream
+	}()
+
 	var responsesReq *dto.OpenAIResponsesRequest
 	switch req := info.Request.(type) {
 	case *dto.OpenAIResponsesRequest:

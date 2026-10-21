@@ -25,6 +25,7 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError
 	case constant.ChannelTypeSub2API,
 		constant.ChannelTypeNewAPI,
 		constant.ChannelTypeCodex,
+		constant.ChannelTypeCodexImage,
 		constant.ChannelTypeAdvancedCustom:
 	default:
 		// Allow retry onto another channel that may support this endpoint.

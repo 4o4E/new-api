@@ -12,7 +12,7 @@ import (
 )
 
 func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {
-	if channel == nil || channel.Type != constant.ChannelTypeCodex {
+	if channel == nil || !constant.IsCodexChannel(channel.Type) {
 		return nil, fmt.Errorf("channel type is not Codex")
 	}
 	if channel.ChannelInfo.IsMultiKey {
@@ -41,7 +41,7 @@ func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {
 
 	baseURL := channel.GetBaseURL()
 	if baseURL == "" {
-		baseURL = constant.GetChannelBaseURL(constant.ChannelTypeCodex)
+		baseURL = constant.GetChannelBaseURL(channel.Type)
 	}
 	return fetchCodexChannelModels(ctx, channel, baseURL, client, clientVersion)
 }

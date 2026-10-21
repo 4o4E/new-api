@@ -404,7 +404,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		return fetchAdvancedCustomUpstreamModelIDs(channel, baseURL)
 	}
 
-	if channel.Type == constant.ChannelTypeCodex {
+	if constant.IsCodexChannel(channel.Type) {
 		return service.FetchCodexChannelModels(channel)
 	}
 

@@ -281,6 +281,7 @@ describe('responses websocket quick option', () => {
   test.each([
     1,
     57,
+    64,
     CHANNEL_TYPE_ADVANCED_CUSTOM,
     CHANNEL_TYPE_SUB2API,
     CHANNEL_TYPE_NEW_API,

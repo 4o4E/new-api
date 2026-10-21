@@ -47,7 +47,7 @@ func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) s
 	if normalized != "" {
 		return normalized
 	}
-	if channel != nil && channel.Type == constant.ChannelTypeCodex {
+	if channel != nil && constant.IsCodexChannel(channel.Type) {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
 	return normalized
@@ -667,7 +667,7 @@ func validateTestResponseBody(respBody []byte, isStream bool) error {
 }
 
 func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
-	return channel != nil && channel.Type == constant.ChannelTypeCodex
+	return channel != nil && constant.IsCodexChannel(channel.Type)
 }
 
 func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {

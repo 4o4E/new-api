@@ -153,6 +153,7 @@ import {
   FIELD_PLACEHOLDERS,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
+  isCodexChannelType,
 } from '../../constants'
 import { useChannelKeyDisclosure } from '../../hooks/use-channel-key-disclosure'
 import {
@@ -691,7 +692,8 @@ export function ChannelMutateDrawer({
     multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
   const isChannelDetailLoading = isEditing && isChannelLoading
   const supportsMultiKeyAddMode =
-    currentType !== 57 && !(currentType === 41 && vertexKeyType === 'api_key')
+    !isCodexChannelType(currentType) &&
+    !(currentType === 41 && vertexKeyType === 'api_key')
   const addModeOptions = useMemo(
     () =>
       supportsMultiKeyAddMode
@@ -4520,7 +4522,7 @@ export function ChannelMutateDrawer({
                 }}
               />
 
-              {currentType === 57 && (
+              {isCodexChannelType(currentType) && (
                 <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
                   <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
                     <div className='text-muted-foreground text-xs'>

@@ -86,13 +86,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish version and compaction fix tags
+      - name: Publish version and feature tags
         env:
           IMAGE: ${{ needs.prepare.outputs.image }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           docker buildx imagetools create \
             --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:codex-image-tool" \
             --tag "$IMAGE:codex-search-history-compaction" \
             "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
           docker buildx imagetools inspect "$IMAGE:$VERSION" >> "$GITHUB_STEP_SUMMARY"

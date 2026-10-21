@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // PrepareResponsesRequest applies the same model, conversion and channel rules
@@ -52,27 +53,48 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 		return nil, nil, nil, types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
-	codexResponses := info.ChannelType == constant.ChannelTypeCodex && info.RelayMode == relayconstant.RelayModeResponses
+	codexResponses := constant.IsCodexChannel(info.ChannelType) &&
+		info.RelayMode == relayconstant.RelayModeResponses
+	forceStream := info.ChannelType == constant.ChannelTypeCodexImage && info.RelayMode == relayconstant.RelayModeResponses
+	if forceStream {
+		// The Codex image-tool channel always streams. The inbound client may
+		// have asked for a non-streaming response, but the upstream contract is
+		// SSE; the handler forwards those events unchanged.
+		info.IsStream = true
+	}
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		// Subscription history needs the same declaration in passthrough mode.
-		// Only materialize bodies containing hosted search history; unchanged
+		// Subscription history needs the same declaration in passthrough mode,
+		// and the Codex backend rejects a body without stream=true. Only
+		// materialize the body when one of those edits is required; unchanged
 		// requests keep the original BodyStorage and its replay lifecycle.
-		if codexResponses && gjson.GetBytes(request.Input, `#(type=="web_search_call")`).Exists() {
+		needsStreamPatch := forceStream && (request.Stream == nil || !*request.Stream)
+		needsSearchPatch := codexResponses && gjson.GetBytes(request.Input, `#(type=="web_search_call")`).Exists()
+		if needsStreamPatch || needsSearchPatch {
 			jsonData, err := storage.Bytes()
 			if err != nil {
 				return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 			}
-			lite, err := codex.ResponsesLiteEnabled(c, info, jsonData)
-			if err != nil {
-				return nil, nil, nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid, types.ErrOptionWithSkipRetry())
+			changed := false
+			if needsSearchPatch {
+				lite, err := codex.ResponsesLiteEnabled(c, info, jsonData)
+				if err != nil {
+					return nil, nil, nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid, types.ErrOptionWithSkipRetry())
+				}
+				jsonData, changed, err = codex.EnsureWebSearchHistoryTool(jsonData, lite)
+				if err != nil {
+					return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+				}
 			}
-			jsonData, changed, err := codex.EnsureWebSearchHistoryTool(jsonData, lite)
-			if err != nil {
-				return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			if needsStreamPatch {
+				jsonData, err = sjson.SetBytes(jsonData, "stream", true)
+				if err != nil {
+					return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+				}
+				changed = true
 			}
 			if changed {
 				body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
@@ -111,6 +133,14 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 			return nil, nil, nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid, types.ErrOptionWithSkipRetry())
 		}
 		jsonData, _, err = codex.EnsureWebSearchHistoryTool(jsonData, lite)
+		if err != nil {
+			return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+	}
+	if forceStream {
+		// Param overrides run after conversion; keep the upstream contract
+		// last so a channel override cannot turn streaming back off.
+		jsonData, err = sjson.SetBytes(jsonData, "stream", true)
 		if err != nil {
 			return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}

@@ -67,6 +67,7 @@ import {
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
   MODEL_FETCHABLE_TYPES,
+  isCodexChannelType,
 } from '../constants'
 import {
   formatRelativeTime,
@@ -449,7 +450,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
     }
 
     setIsUpdating(true)
-    if (channel.type === 57) {
+    if (isCodexChannelType(channel.type)) {
       try {
         const res = await getCodexUsage(channel.id)
         if (!res.success) {
@@ -495,7 +496,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
   let remainingBadgeLabel = sensitiveVisible ? remainingDisplay : SENSITIVE_MASK
   if (sensitiveVisible && isUpdating) {
     remainingBadgeLabel = t('Updating...')
-  } else if (sensitiveVisible && channel.type === 57) {
+  } else if (sensitiveVisible && isCodexChannelType(channel.type)) {
     remainingBadgeLabel = t('Account Info')
   } else if (sensitiveVisible && isInferenceChannel) {
     remainingBadgeLabel = inferenceStatusLabel
@@ -503,13 +504,13 @@ export function BalanceCell({ channel }: { channel: Channel }) {
   let remainingTooltipLabel = remainingLabel
   if (!sensitiveVisible) {
     remainingTooltipLabel = maskedRemainingLabel
-  } else if (channel.type === 57) {
+  } else if (isCodexChannelType(channel.type)) {
     remainingTooltipLabel = t('Click to view Codex usage')
   } else if (isInferenceChannel) {
     remainingTooltipLabel = inferenceStatusLabel
   }
   let remainingBadgeVariant: StatusBadgeProps['variant'] = variant
-  if (channel.type === 57 || isInferenceChannel) {
+  if (isCodexChannelType(channel.type) || isInferenceChannel) {
     remainingBadgeVariant = 'info'
   } else if (isUpdating) {
     remainingBadgeVariant = 'neutral'
@@ -566,7 +567,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
           />
           <TooltipContent>
             <p>{remainingTooltipLabel}</p>
-            {channel.type !== 57 && !isInferenceChannel && (
+            {!isCodexChannelType(channel.type) && !isInferenceChannel && (
               <p>{t('Click to update balance')}</p>
             )}
           </TooltipContent>

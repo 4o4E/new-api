@@ -25,6 +25,7 @@ import {
   CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
+  isCodexChannelType,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
@@ -362,7 +363,7 @@ export const channelFormSchema = z
       )
     }
 
-    if (data.type === 57) {
+    if (isCodexChannelType(data.type)) {
       if (data.multi_key_mode && data.multi_key_mode !== 'single') {
         addRequiredIssue(
           ctx,

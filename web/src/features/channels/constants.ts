@@ -28,6 +28,14 @@ export const CHANNEL_PRIORITY_GUIDE_KEYS = {
 
 export const CHANNEL_TYPE_OLLAMA = 4
 
+export const CHANNEL_TYPE_CODEX = 57
+
+export const CHANNEL_TYPE_CODEX_IMAGE = 64
+
+export function isCodexChannelType(type: number): boolean {
+  return type === CHANNEL_TYPE_CODEX || type === CHANNEL_TYPE_CODEX_IMAGE
+}
+
 export const CHANNEL_TYPE_SUB2API = 59
 
 export const CHANNEL_TYPE_NEW_API = 60
@@ -99,6 +107,7 @@ export const CHANNEL_TYPES = {
   61: 'Task Plugin',
   62: 'vLLM',
   63: 'SGLang',
+  64: 'ChatGPT Subscription (Codex, Image Tool)',
 } as const
 
 export type ChannelProviderPresentation = {
@@ -182,6 +191,10 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
   },
   62: { descriptionKey: 'Connect to self-hosted models served by vLLM' },
   63: { descriptionKey: 'Connect to self-hosted models served by SGLang' },
+  64: {
+    descriptionKey:
+      'Access Codex with forced streaming Responses for hosted image generation',
+  },
 } satisfies Record<
   Exclude<keyof typeof CHANNEL_TYPES, 0 | typeof CHANNEL_TYPE_TASK_PLUGIN>,
   ChannelProviderPresentation
@@ -189,8 +202,8 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
   1, 14, 24, 33, 43, 3, 41, 17, 45, 25, 26, 23, 48, 60, 58, 59, 61, 42, 34, 20,
-  4, 62, 40, 27, 15, 46, 18, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22, 21,
-  44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  4, 62, 40, 27, 15, 46, 18, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 64, 22,
+  21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -525,6 +538,7 @@ export const MODEL_FETCHABLE_TYPES = new Set([
   58,
   59,
   60,
+  64,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
 ])
@@ -535,6 +549,7 @@ export const FIELD_PASSTHROUGH_TYPES = new Set([
   57,
   58,
   59,
+  64,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
@@ -545,6 +560,7 @@ export const OPENAI_FIELD_PASSTHROUGH_TYPES = new Set([
   57,
   58,
   59,
+  64,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
@@ -568,6 +584,7 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   50: 'Format: AccessKey|SecretKey (or just ApiKey if upstream is New API)',
   51: 'Format: Access Key ID|Secret Access Key',
   57: 'Paste Codex OAuth JSON credential (access_token / refresh_token / account_id)',
+  64: 'Paste Codex OAuth JSON credential (access_token / refresh_token / account_id)',
   59: 'Enter API key for this channel',
   60: 'Enter API key for this channel',
   62: 'vLLM API key, or EMPTY if authentication is disabled',

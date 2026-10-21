@@ -73,7 +73,7 @@ func fetchCodexChannelWhamData(
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel not found"})
 		return
 	}
-	if ch.Type != constant.ChannelTypeCodex {
+	if !constant.IsCodexChannel(ch.Type) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel type is not Codex"})
 		return
 	}

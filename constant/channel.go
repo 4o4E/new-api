@@ -61,6 +61,7 @@ const (
 	ChannelTypeTaskPlugin     = 61
 	ChannelTypeVLLM           = 62
 	ChannelTypeSGLang         = 63
+	ChannelTypeCodexImage     = 64
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -132,6 +133,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //61
 	"",                                          //62
 	"",                                          //63
+	"https://chatgpt.com",                       //64
 }
 
 func GetChannelBaseURL(channelType int) string {
@@ -202,6 +204,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeTaskPlugin:     "Task Plugin",
 	ChannelTypeVLLM:           "vLLM",
 	ChannelTypeSGLang:         "SGLang",
+	ChannelTypeCodexImage:     "ChatGPT Subscription (Codex, Image Tool)",
 }
 
 func GetChannelTypeName(channelType int) string {
@@ -209,6 +212,14 @@ func GetChannelTypeName(channelType int) string {
 		return name
 	}
 	return "Unknown"
+}
+
+// IsCodexChannel reports whether the channel serves the ChatGPT Codex
+// subscription protocol. The image-tool variant keeps the same credential,
+// model discovery and response handling, and only changes the streaming
+// contract for hosted image generation.
+func IsCodexChannel(channelType int) bool {
+	return channelType == ChannelTypeCodex || channelType == ChannelTypeCodexImage
 }
 
 type ChannelSpecialBase struct {
