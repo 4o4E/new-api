@@ -92,7 +92,7 @@ func TestResponsesSearchHistoryCompatibility(t *testing.T) {
 				assert.Equal(t, tc.wantChoice, gjson.GetBytes(payload, "tool_choice").String())
 				assert.Equal(t, tc.wantTools, int(gjson.GetBytes(payload, "tools.#").Int()))
 			} else {
-				_, body, closer, apiErr := PrepareResponsesRequest(c, info, &request)
+				_, body, closer, apiErr := PrepareResponsesRequest(c, info, &request, false)
 				require.Nil(t, apiErr)
 				payload, err = io.ReadAll(body)
 				require.NoError(t, err)

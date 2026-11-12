@@ -54,7 +54,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		)
 	}
 
-	adaptor, requestBody, closer, apiErr := PrepareResponsesRequest(c, info, responsesReq)
+	adaptor, requestBody, closer, apiErr := PrepareResponsesRequest(c, info, responsesReq, true)
 	if apiErr != nil {
 		return apiErr
 	}

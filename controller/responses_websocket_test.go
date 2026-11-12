@@ -1428,3 +1428,37 @@ func TestResponsesWebSocketPreRoutingRejectionsFollowHealthClassification(t *tes
 		})
 	}
 }
+
+func TestResponsesWSUpgraderNegotiatesCompression(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := responsesWSUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			kind, message, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := conn.WriteMessage(kind, message); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	dialer := websocket.Dialer{EnableCompression: true}
+	conn, resp, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NotNil(t, resp)
+	assert.Contains(t, resp.Header.Get("Sec-WebSocket-Extensions"), "permessage-deflate")
+
+	payload := []byte(strings.Repeat(`{"type":"response.output_text.delta","delta":"hello"}`, 1000))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, payload))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, got, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+}

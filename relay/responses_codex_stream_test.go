@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,6 +12,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -28,6 +30,7 @@ func TestCodexResponsesForcesStreamAndBillsImageGeneration(t *testing.T) {
 	})
 
 	var upstreamBody []byte
+	var upstreamEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		upstreamBody, err = io.ReadAll(r.Body)
@@ -35,6 +38,7 @@ func TestCodexResponsesForcesStreamAndBillsImageGeneration(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		upstreamEncoding = r.Header.Get("Content-Encoding")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, `data: {"type":"response.output_item.done","output_index":0,"item":{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"}}`+"\n\n")
 		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.5","status":"completed","output":[{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`+"\n\n")
@@ -61,12 +65,18 @@ func TestCodexResponsesForcesStreamAndBillsImageGeneration(t *testing.T) {
 	info := relaycommon.GenRelayInfoResponses(c, request)
 	info.DisablePing = true
 
-	adaptor, body, closer, apiErr := PrepareResponsesRequest(c, info, request)
+	adaptor, body, closer, apiErr := PrepareResponsesRequest(c, info, request, true)
 	require.Nil(t, apiErr)
 	defer closer.Close()
 	require.True(t, info.IsStream)
 
 	response, err := adaptor.DoRequest(c, info, body)
+	require.NoError(t, err)
+	require.Equal(t, "zstd", upstreamEncoding)
+	decoder, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer decoder.Close()
+	upstreamBody, err = decoder.DecodeAll(upstreamBody, nil)
 	require.NoError(t, err)
 	httpResponse, ok := response.(*http.Response)
 	require.True(t, ok)
@@ -88,6 +98,7 @@ func TestRegularCodexResponsesKeepsNonStreamingRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var upstreamBody []byte
+	var upstreamEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		upstreamBody, err = io.ReadAll(r.Body)
@@ -95,6 +106,7 @@ func TestRegularCodexResponsesKeepsNonStreamingRequest(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		upstreamEncoding = r.Header.Get("Content-Encoding")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","model":"gpt-5.5","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}`)
 	}))
@@ -115,12 +127,18 @@ func TestRegularCodexResponsesKeepsNonStreamingRequest(t *testing.T) {
 	}
 	info := relaycommon.GenRelayInfoResponses(c, request)
 
-	adaptor, body, closer, apiErr := PrepareResponsesRequest(c, info, request)
+	adaptor, body, closer, apiErr := PrepareResponsesRequest(c, info, request, true)
 	require.Nil(t, apiErr)
 	defer closer.Close()
 	require.False(t, info.IsStream)
 
 	response, err := adaptor.DoRequest(c, info, body)
+	require.NoError(t, err)
+	require.Equal(t, "zstd", upstreamEncoding)
+	decoder, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer decoder.Close()
+	upstreamBody, err = decoder.DecodeAll(upstreamBody, nil)
 	require.NoError(t, err)
 	httpResponse, ok := response.(*http.Response)
 	require.True(t, ok)
@@ -129,4 +147,37 @@ func TestRegularCodexResponsesKeepsNonStreamingRequest(t *testing.T) {
 
 	assert.False(t, gjson.GetBytes(upstreamBody, "stream").Bool())
 	assert.Equal(t, "resp_1", gjson.GetBytes(w.Body.Bytes(), "id").String())
+}
+
+// Pass-through mode still has to compress: the client's original bytes are
+// decompressed at the edge, so forwarding them unchanged would send the full
+// JSON body to the Codex backend.
+func TestCodexResponsesPassThroughCompressesBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	payload := `{"model":"gpt-5.5","input":[{"role":"user","content":"hello"}],"stream":true}`
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-5.5")
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeCodex)
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{PassThroughBodyEnabled: true})
+	stream := true
+	request := &dto.OpenAIResponsesRequest{Model: "gpt-5.5", Input: []byte(`[{"role":"user","content":"hello"}]`), Stream: &stream}
+	info := relaycommon.GenRelayInfoResponses(c, request)
+
+	_, body, closer, apiErr := PrepareResponsesRequest(c, info, request, true)
+	require.Nil(t, apiErr)
+	defer closer.Close()
+	encoded, ok := body.(interface{ ContentEncoding() string })
+	require.True(t, ok)
+	assert.Equal(t, "zstd", encoded.ContentEncoding())
+
+	compressed, err := io.ReadAll(body)
+	require.NoError(t, err)
+	decoder, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer decoder.Close()
+	decoded, err := decoder.DecodeAll(compressed, nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, payload, string(decoded))
 }

@@ -2,12 +2,19 @@ package channel
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -215,5 +222,108 @@ func TestToWebSocketURL(t *testing.T) {
 		"ws://127.0.0.1:3000/backend-api/codex/responses": "ws://127.0.0.1:3000/backend-api/codex/responses",
 	} {
 		assert.Equal(t, want, toWebSocketURL(input), input)
+	}
+}
+
+type wssCompressionTestAdaptor struct {
+	Adaptor
+	url string
+}
+
+func (a wssCompressionTestAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+
+func (a wssCompressionTestAdaptor) SetupRequestHeader(*gin.Context, *http.Header, *relaycommon.RelayInfo) error {
+	return nil
+}
+
+func TestDoWssRequestNegotiatesCompressionForCodexResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		channelType int
+		want        bool
+	}{
+		{name: "codex responses", channelType: constant.ChannelTypeCodex, want: true},
+		{name: "other websocket provider", channelType: constant.ChannelTypeOpenAI, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extensions := make(chan string, 1)
+			echo := make(chan string, 1)
+			upgrader := websocket.Upgrader{EnableCompression: true}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				extensions <- r.Header.Get("Sec-WebSocket-Extensions")
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, message, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				echo <- string(message)
+				_ = conn.WriteMessage(websocket.TextMessage, message)
+			}))
+			defer server.Close()
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			info := &relaycommon.RelayInfo{
+				RelayMode:   relayconstant.RelayModeResponses,
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelType: tc.channelType},
+			}
+			conn, err := DoWssRequest(wssCompressionTestAdaptor{url: server.URL}, c, info, nil)
+			require.NoError(t, err)
+			defer conn.Close()
+
+			select {
+			case header := <-extensions:
+				assert.Equal(t, tc.want, strings.Contains(header, "permessage-deflate"), header)
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream handshake was not observed")
+			}
+
+			payload := strings.Repeat(`{"type":"response.create","input":"compressible"}`, 2000)
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(payload)))
+			select {
+			case got := <-echo:
+				assert.Equal(t, payload, got)
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream echo was not observed")
+			}
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+			_, reply, err := conn.ReadMessage()
+			require.NoError(t, err)
+			assert.Equal(t, payload, string(reply))
+		})
+	}
+}
+
+func TestApplyUpstreamBodyMetadataCarriesZstdEncodingOnReplay(t *testing.T) {
+	payload := []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":"hello"}]}`)
+	body, closer, err := relaycommon.NewOutboundZstdJSONBody(payload)
+	require.NoError(t, err)
+	defer closer.Close()
+
+	req, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", body)
+	require.NoError(t, err)
+	ApplyUpstreamBodyMetadata(req, body)
+	assert.Equal(t, "zstd", req.Header.Get("Content-Encoding"))
+	assert.Equal(t, body.Size(), req.ContentLength)
+	require.NotNil(t, req.GetBody)
+
+	decoder, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer decoder.Close()
+	for i := range 2 {
+		replay, err := req.GetBody()
+		require.NoError(t, err, "replay %d", i)
+		compressed, err := io.ReadAll(replay)
+		require.NoError(t, err)
+		require.NoError(t, replay.Close())
+		decoded, err := decoder.DecodeAll(compressed, nil)
+		require.NoError(t, err)
+		assert.Equal(t, payload, decoded, "replay %d", i)
 	}
 }

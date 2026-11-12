@@ -69,6 +69,25 @@ type responsesWSMessage struct {
 	err  error
 }
 
+// readResponsesWSMessage bounds the decompressed message size. The connection
+// read limit applies to the compressed frame, so a permessage-deflate peer
+// could otherwise expand a small frame far beyond it.
+func readResponsesWSMessage(conn *websocket.Conn, limit int64) (int, []byte, error) {
+	kind, reader, err := conn.NextReader()
+	if err != nil {
+		return kind, nil, err
+	}
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return kind, nil, err
+	}
+	if int64(len(body)) > limit {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseMessageTooBig, ""), time.Now().Add(time.Second))
+		return kind, nil, websocket.ErrReadLimit
+	}
+	return kind, body, nil
+}
+
 // responsesWSControl is a client control event (response.cancel) whose
 // envelope the read loop already parsed.
 type responsesWSControl struct {
@@ -130,7 +149,8 @@ func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner Res
 	if maxMB <= 0 {
 		maxMB = 128
 	}
-	client.SetReadLimit(int64(maxMB) << 20)
+	readLimit := int64(maxMB) << 20
+	client.SetReadLimit(readLimit)
 	defer func() {
 		// Unless an earlier shutdown ended the read, the client closed or left.
 		// Gorilla already answered a client close frame, so this tells the upstream.
@@ -139,7 +159,7 @@ func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner Res
 	}()
 
 	for {
-		_, message, err := client.ReadMessage()
+		_, message, err := readResponsesWSMessage(client, readLimit)
 		if err != nil {
 			return nil
 		}
@@ -621,7 +641,7 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, info *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate common.RawMessage, streamID string) ([]byte, *types.NewAPIError) {
-	_, body, closer, apiErr := PrepareResponsesRequest(c, info, &req)
+	_, body, closer, apiErr := PrepareResponsesRequest(c, info, &req, false)
 	if apiErr != nil {
 		return nil, apiErr
 	}
@@ -645,7 +665,7 @@ func (s *responsesWSSession) startTargetReader(target *websocket.Conn) {
 	target.SetReadLimit(limit)
 	s.workers.Go(func() {
 		for {
-			kind, body, err := target.ReadMessage()
+			kind, body, err := readResponsesWSMessage(target, limit)
 			incoming := responsesWSMessage{kind: kind, body: body, err: err}
 			if state := s.getCurrent(); state != nil {
 				select {

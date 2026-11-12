@@ -21,11 +21,28 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// responsesBodyCompressionEnabled reports whether the outbound body should be
+// zstd-compressed. Only the Codex backend accepts Content-Encoding: zstd, and
+// only its /responses endpoint uses the compressed JSON body.
+func responsesBodyCompressionEnabled(info *relaycommon.RelayInfo, compress bool) bool {
+	return compress && info.RelayMode == relayconstant.RelayModeResponses && constant.IsCodexChannel(info.ChannelType)
+}
+
+func newResponsesRequestBody(info *relaycommon.RelayInfo, compress bool, jsonData []byte) (common.ReplayableBody, io.Closer, error) {
+	if responsesBodyCompressionEnabled(info, compress) {
+		return relaycommon.NewOutboundZstdJSONBody(jsonData)
+	}
+	return relaycommon.NewOutboundJSONBody(jsonData)
+}
+
 // PrepareResponsesRequest applies the same model, conversion and channel rules
-// for HTTP and WebSocket requests. The caller closes closer after the attempt;
-// passthrough bodies remain owned by the incoming request's BodyStorage.
-// The returned adaptor retains route/conversion state for DoRequest/DoResponse.
-func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.OpenAIResponsesRequest) (relaychannel.Adaptor, common.ReplayableBody, io.Closer, *types.NewAPIError) {
+// for HTTP and WebSocket requests. compressRequestBody enables zstd compression
+// of the HTTP upstream body for Codex /responses; WebSocket callers pass false
+// because they wrap the JSON in a text event. The caller closes closer after
+// the attempt; passthrough bodies remain owned by the incoming request's
+// BodyStorage. The returned adaptor retains route/conversion state for
+// DoRequest/DoResponse.
+func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.OpenAIResponsesRequest, compressRequestBody bool) (relaychannel.Adaptor, common.ReplayableBody, io.Closer, *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
 		!common.SupportsResponsesCompact(info.ChannelType, info.ApiType) {
@@ -68,13 +85,14 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 			return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
 		// Subscription history needs the same declaration in passthrough mode,
-		// and the Codex backend rejects a body without stream=true. Only
-		// materialize the body when one of those edits is required; unchanged
-		// requests keep the original BodyStorage and its replay lifecycle.
+		// and the Codex backend rejects a body without stream=true. Requests
+		// that need no edit stay on the original BodyStorage unless the
+		// compressed upstream body requires materializing it.
 		needsStreamPatch := forceStream && (request.Stream == nil || !*request.Stream)
 		needsSearchPatch := codexResponses && gjson.GetBytes(request.Input, `#(type=="web_search_call")`).Exists()
+		var jsonData []byte
 		if needsStreamPatch || needsSearchPatch {
-			jsonData, err := storage.Bytes()
+			jsonData, err = storage.Bytes()
 			if err != nil {
 				return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 			}
@@ -97,12 +115,25 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 				changed = true
 			}
 			if changed {
-				body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+				body, closer, err := newResponsesRequestBody(info, compressRequestBody, jsonData)
 				if err != nil {
 					return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 				}
 				return adaptor, body, closer, nil
 			}
+		}
+		if responsesBodyCompressionEnabled(info, compressRequestBody) {
+			if jsonData == nil {
+				jsonData, err = storage.Bytes()
+				if err != nil {
+					return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+				}
+			}
+			body, closer, err := newResponsesRequestBody(info, compressRequestBody, jsonData)
+			if err != nil {
+				return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			return adaptor, body, closer, nil
 		}
 		body := common.NewReplayableBodyReader(storage)
 		return adaptor, body, io.NopCloser(body), nil
@@ -147,7 +178,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 	}
 
 	logger.LogDebug(c, "requestBody: %s", jsonData)
-	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	body, closer, err := newResponsesRequestBody(info, compressRequestBody, jsonData)
 	if err != nil {
 		return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 type responsesWSRequestContextKey struct{}
@@ -111,10 +112,19 @@ func newResponsesWSRequestRunner(c *gin.Context) relay.ResponsesWSRequestRunner 
 	}
 }
 
+// responsesWSUpgrader negotiates permessage-deflate for the Responses
+// WebSocket relay. Codex clients offer the extension, and each relayed frame
+// is recompressed toward the upstream connection.
+var responsesWSUpgrader = websocket.Upgrader{
+	Subprotocols:      []string{"realtime", "responses"},
+	EnableCompression: true,
+	CheckOrigin:       func(r *http.Request) bool { return true },
+}
+
 func ResponsesWebSocket(c *gin.Context) {
 	requestID := c.GetString(common.RequestIdKey)
 	runner := newResponsesWSRequestRunner(c)
-	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	ws, err := responsesWSUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}

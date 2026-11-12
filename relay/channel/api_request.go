@@ -42,6 +42,11 @@ func ApplyUpstreamBodyMetadata(req *http.Request, body io.Reader) {
 		req.Body = io.NopCloser(body)
 	}
 
+	if encoded, ok := body.(interface{ ContentEncoding() string }); ok {
+		if encoding := encoded.ContentEncoding(); encoding != "" {
+			req.Header.Set("Content-Encoding", encoding)
+		}
+	}
 	req.ContentLength = replayable.Size()
 	if req.GetBody == nil {
 		req.GetBody = replayable.NewReader
@@ -407,6 +412,12 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	dialer := *websocket.DefaultDialer
+	// Codex negotiates permessage-deflate with its upstream. Offer the same
+	// extension to the Codex backend so relayed frames are not inflated to
+	// the raw JSON size. Other WebSocket upstreams keep the previous behavior.
+	if info.RelayMode == constant.RelayModeResponses && appconstant.IsCodexChannel(info.ChannelType) {
+		dialer.EnableCompression = true
+	}
 	if info.ChannelSetting.Proxy != "" {
 		proxyURL, _, proxyErr := common2.ParseProxyURLRuntime(info.ChannelSetting.Proxy)
 		if proxyErr != nil {

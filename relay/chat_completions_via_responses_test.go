@@ -54,7 +54,7 @@ func TestPrepareResponsesRequestRetainsConvertedAdaptor(t *testing.T) {
 	})
 	request := &dto.OpenAIResponsesRequest{Model: "gpt-4o", Input: []byte(`"hello"`)}
 	info := relaycommon.GenRelayInfoResponses(c, request)
-	adaptor, body, closer, apiErr := PrepareResponsesRequest(c, info, request)
+	adaptor, body, closer, apiErr := PrepareResponsesRequest(c, info, request, false)
 	require.Nil(t, apiErr)
 	defer closer.Close()
 	response, err := adaptor.DoRequest(c, info, body)

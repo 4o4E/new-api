@@ -4,7 +4,29 @@ import (
 	"io"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/klauspost/compress/zstd"
 )
+
+// requestBodyZstdEncoder matches the Codex client's request compression level.
+// EncodeAll is safe for concurrent use.
+var requestBodyZstdEncoder = func() *zstd.Encoder {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		panic(err)
+	}
+	return encoder
+}()
+
+// encodedReplayableBody exposes the Content-Encoding that the upstream request
+// must declare for the bytes it carries.
+type encodedReplayableBody struct {
+	common.ReplayableBody
+	encoding string
+}
+
+func (b encodedReplayableBody) ContentEncoding() string {
+	return b.encoding
+}
 
 // NewOutboundJSONBody wraps the already-marshaled upstream request body into a
 // BodyStorage. When disk cache is enabled and the payload exceeds the configured
@@ -28,4 +50,19 @@ func NewOutboundJSONBody(data []byte) (body common.ReplayableBody, closer io.Clo
 		return nil, nil, err
 	}
 	return common.NewReplayableBodyReader(storage), storage, nil
+}
+
+// NewOutboundZstdJSONBody compresses the upstream request body with zstd and
+// marks it for the Content-Encoding header. Compression happens before the
+// body is stored, so retries and redirects replay the compressed bytes.
+func NewOutboundZstdJSONBody(data []byte) (body common.ReplayableBody, closer io.Closer, err error) {
+	compressed := requestBodyZstdEncoder.EncodeAll(data, make([]byte, 0, len(data)/4))
+	storage, err := common.CreateBodyStorage(compressed)
+	if err != nil {
+		return nil, nil, err
+	}
+	return encodedReplayableBody{
+		ReplayableBody: common.NewReplayableBodyReader(storage),
+		encoding:       "zstd",
+	}, storage, nil
 }
