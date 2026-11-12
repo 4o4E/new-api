@@ -86,13 +86,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish version and feature tags
+      - name: Publish version, feature, and latest tags
         env:
           IMAGE: ${{ needs.prepare.outputs.image }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           docker buildx imagetools create \
             --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:latest" \
             --tag "$IMAGE:codex-image-tool" \
             --tag "$IMAGE:codex-search-history-compaction" \
             "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
