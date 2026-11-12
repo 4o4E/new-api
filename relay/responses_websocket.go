@@ -260,7 +260,13 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		return newResponsesWSInvalidRequestError(errors.New("model is required"))
 	}
 	if s.lockedModel != "" && modelName != s.lockedModel {
-		return newResponsesWSInvalidRequestError(fmt.Errorf("responses websocket connection is locked to model %q", s.lockedModel))
+		// Codex clients switch models per response.create on one connection.
+		// Other WebSocket providers keep the original single-model session
+		// contract; a model change there must reopen the connection.
+		channel, err := appmodel.CacheGetChannel(s.lockedChannelID)
+		if err != nil || channel == nil || !appconstant.IsCodexChannel(channel.Type) {
+			return newResponsesWSInvalidRequestError(fmt.Errorf("responses websocket connection is locked to model %q", s.lockedModel))
+		}
 	}
 	if apiErr = checkResponsesWSModelAccess(c, modelName); apiErr != nil {
 		return apiErr
@@ -269,6 +275,10 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	common.SetContextKey(c, appconstant.ContextKeyRequestStartTime, time.Now())
 	service.GetChannelConstraints(c).AddFilter(appdto.ChannelFilter{Kind: appdto.FilterRequestPath, RequestPath: c.Request.URL.Path})
 
+	// Codex WebSocket sessions may switch models per response.create: Codex
+	// uses a faster model for some turns while keeping one connection.
+	// restoreConnectionContext revalidates the locked channel, group and route
+	// for the requested model. Other providers keep the single-model lock.
 	if s.lockedChannelID != 0 {
 		if apiErr = s.restoreConnectionContext(c, modelName); apiErr != nil {
 			return apiErr
