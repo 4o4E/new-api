@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -123,6 +124,7 @@ var responsesWSUpgrader = websocket.Upgrader{
 
 func ResponsesWebSocket(c *gin.Context) {
 	requestID := c.GetString(common.RequestIdKey)
+	logger.LogInfo(c, fmt.Sprintf("client websocket extensions: %q", c.Request.Header.Get("Sec-WebSocket-Extensions")))
 	runner := newResponsesWSRequestRunner(c)
 	ws, err := responsesWSUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {

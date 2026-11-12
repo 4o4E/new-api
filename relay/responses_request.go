@@ -28,9 +28,13 @@ func responsesBodyCompressionEnabled(info *relaycommon.RelayInfo, compress bool)
 	return compress && info.RelayMode == relayconstant.RelayModeResponses && constant.IsCodexChannel(info.ChannelType)
 }
 
-func newResponsesRequestBody(info *relaycommon.RelayInfo, compress bool, jsonData []byte) (common.ReplayableBody, io.Closer, error) {
+func newResponsesRequestBody(c *gin.Context, info *relaycommon.RelayInfo, compress bool, jsonData []byte) (common.ReplayableBody, io.Closer, error) {
 	if responsesBodyCompressionEnabled(info, compress) {
-		return relaycommon.NewOutboundZstdJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundZstdJSONBody(jsonData)
+		if err == nil {
+			logger.LogInfo(c, fmt.Sprintf("responses body compression: channel=%d model=%s raw=%d compressed=%d", info.ChannelId, info.OriginModelName, len(jsonData), body.Size()))
+		}
+		return body, closer, err
 	}
 	return relaycommon.NewOutboundJSONBody(jsonData)
 }
@@ -115,7 +119,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 				changed = true
 			}
 			if changed {
-				body, closer, err := newResponsesRequestBody(info, compressRequestBody, jsonData)
+				body, closer, err := newResponsesRequestBody(c, info, compressRequestBody, jsonData)
 				if err != nil {
 					return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 				}
@@ -129,7 +133,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 					return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 				}
 			}
-			body, closer, err := newResponsesRequestBody(info, compressRequestBody, jsonData)
+			body, closer, err := newResponsesRequestBody(c, info, compressRequestBody, jsonData)
 			if err != nil {
 				return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
@@ -185,7 +189,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 	}
 
 	logger.LogDebug(c, "requestBody: %s", jsonData)
-	body, closer, err := newResponsesRequestBody(info, compressRequestBody, jsonData)
+	body, closer, err := newResponsesRequestBody(c, info, compressRequestBody, jsonData)
 	if err != nil {
 		return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
