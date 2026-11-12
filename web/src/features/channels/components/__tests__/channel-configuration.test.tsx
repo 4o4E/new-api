@@ -1232,6 +1232,102 @@ test('quick options and detailed settings share changes across tabs and save the
   })
 })
 
+test.each(['stacked', 'inline'])(
+  'advanced custom body passthrough saves and reloads from %s quick options and can be disabled in detailed settings',
+  async (layout) => {
+    if (layout === 'inline') useWideScreen()
+    const settings = {
+      advanced_custom: {
+        advanced_routes: [
+          {
+            incoming_path: '/v1/chat/completions',
+            upstream_path: '/v1/chat/completions',
+            converter: 'none',
+          },
+        ],
+      },
+    }
+    editingChannel = {
+      ...editingChannel,
+      type: 58,
+      settings: JSON.stringify(settings),
+      header_override: '{"*":true}',
+    }
+    const put = vi
+      .spyOn(api, 'put')
+      .mockImplementation(async (_url, payload) => {
+        editingChannel = { ...editingChannel, ...(payload as Partial<Channel>) }
+        return { data: { success: true } }
+      })
+    const user = userEvent.setup()
+    render(<ConfigurationHarness currentRow={editingChannel} />)
+    await screen.findByDisplayValue('Existing channel')
+    const quick = within(screen.getByRole('group', { name: 'Quick options' }))
+    const toggle = quick.getByRole('switch', { name: 'Pass Through Body' })
+    expect(toggle).not.toBeChecked()
+    expect(
+      quick.getByRole('switch', { name: 'Pass Through Request Headers' })
+    ).toBeChecked()
+    await user.click(toggle)
+    const warning = await screen.findByRole('alertdialog', {
+      name: 'Enable request body passthrough?',
+    })
+    expect(warning).toHaveTextContent(
+      'Channel-level body passthrough applies to all routes. Requests to routes that require format conversion will fail. To enable passthrough for selected routes only, use the route-level switches instead.'
+    )
+    await user.click(within(warning).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    )
+    expect(toggle).not.toBeChecked()
+    await user.click(toggle)
+    await user.click(
+      await screen.findByRole('button', { name: 'Enable passthrough' })
+    )
+    expect(toggle).toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(editingChannel.setting ?? '{}')).toMatchObject({
+      pass_through_body_enabled: true,
+    })
+    expect(JSON.parse(editingChannel.settings ?? '{}').advanced_custom).toEqual(
+      settings.advanced_custom
+    )
+    expect(JSON.parse(editingChannel.header_override ?? '{}')).toEqual({
+      '*': true,
+    })
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Update Channel' })
+      ).not.toBeInTheDocument()
+    )
+    await user.click(screen.getByRole('button', { name: 'Open channel' }))
+    await screen.findByDisplayValue('Existing channel')
+    expect(
+      within(screen.getByRole('group', { name: 'Quick options' })).getByRole(
+        'switch',
+        { name: 'Pass Through Body' }
+      )
+    ).toBeChecked()
+    await user.click(screen.getByRole('tab', { name: /Request & Response/ }))
+    const detailed = within(
+      screen.getByRole('group', { name: 'Request processing' })
+    ).getByRole('switch', { name: 'Pass Through Body' })
+    expect(detailed).toBeChecked()
+    await user.click(detailed)
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(editingChannel.setting ?? '{}')).toMatchObject({
+      pass_through_body_enabled: false,
+    })
+    expect(JSON.parse(editingChannel.settings ?? '{}').advanced_custom).toEqual(
+      settings.advanced_custom
+    )
+  }
+)
+
 test('quick options show only applicable shortcuts when the provider changes', async () => {
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
@@ -2395,6 +2491,91 @@ test('fetched upstream models can be redirected in bulk with the model list sync
   expect(
     screen.getByRole('combobox', { name: 'Upstream Model Name' })
   ).toHaveValue('upstream-model')
+})
+
+async function batchRedirectExistingModel(
+  user: ReturnType<typeof userEvent.setup>,
+  model: string,
+  suffix: string
+) {
+  await user.click(screen.getByRole('button', { name: 'Fetch from Upstream' }))
+  await user.click(
+    await screen.findByRole('tab', { name: 'Existing Models (1)' })
+  )
+  await screen.findByRole('checkbox', { name: model })
+  await user.click(screen.getByRole('button', { name: 'Batch redirect' }))
+  const dialog = within(
+    screen.getByRole('dialog', { name: 'Batch add mappings' })
+  )
+  await user.click(dialog.getByRole('checkbox', { name: model }))
+  await user.type(dialog.getByRole('textbox', { name: 'Suffix' }), suffix)
+  await user.click(dialog.getByRole('button', { name: 'Add 1 mapping(s)' }))
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('dialog', { name: 'Batch add mappings' })
+    ).not.toBeInTheDocument()
+  )
+}
+
+test('a synced batch redirect after switching channels does not restore models hidden in the previous channel', async () => {
+  editingChannel.models = 'custom-model,upstream-model'
+  const otherChannel = {
+    ...editingChannel,
+    id: 43,
+    name: 'Second channel',
+    models: 'second-model,other-model',
+  }
+  const originalGet = vi.mocked(api.get).getMockImplementation()
+  vi.mocked(api.get).mockImplementation(async (url, config) => {
+    if (url === '/api/channel/43') {
+      return { data: { success: true, data: otherChannel } }
+    }
+    if (url === '/api/channel/fetch_models/43') {
+      return { data: { success: true, data: ['other-model'] } }
+    }
+    return originalGet?.(url, config)
+  })
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  const view = render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await batchRedirectExistingModel(user, 'upstream-model', '-model')
+  expect(screen.getByRole('button', { name: 'upstream' })).toBeVisible()
+
+  view.rerender(<ConfigurationHarness currentRow={otherChannel} />)
+  await screen.findByDisplayValue('Second channel')
+  await batchRedirectExistingModel(user, 'other-model', '-model')
+
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  expect(put.mock.calls[0]?.[1]).toMatchObject({
+    id: 43,
+    models: 'second-model,other',
+  })
+})
+
+test('a synced batch redirect does not revert mapping rows deleted without syncing', async () => {
+  editingChannel.models = 'custom-model,upstream-model'
+  editingChannel.model_mapping = '{"custom-model":"custom-upstream"}'
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+  await user.click(screen.getByRole('button', { name: 'Delete mapping' }))
+  await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
+  await batchRedirectExistingModel(user, 'upstream-model', '-model')
+
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  expect(put.mock.calls[0]?.[1]).toMatchObject({
+    id: 42,
+    models: 'custom-model,upstream',
+  })
 })
 
 test('a fetched upstream model can be given a request name from its own row', async () => {

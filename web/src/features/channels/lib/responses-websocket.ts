@@ -26,6 +26,7 @@ import { CHANNEL_TYPE_ADVANCED_CUSTOM } from './advanced-custom'
  */
 const RESPONSES_WEBSOCKET_CHANNEL_TYPES: ReadonlySet<number> = new Set([
   1,
+  3,
   57,
   64,
   CHANNEL_TYPE_ADVANCED_CUSTOM,
